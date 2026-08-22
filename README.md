@@ -4,7 +4,7 @@ This repository contains my Python internship assignments. Full project
 files for each week live in their own folder (linked below); this README
 also inlines the key required deliverables directly — architecture, flow
 diagram/pseudocode, representative code, and test scenarios — for Weeks
-1, 2, and 3, so everything can be reviewed without opening subfolders.
+1 through 4, so everything can be reviewed without opening subfolders.
 
 ---
 
@@ -385,6 +385,160 @@ cd Week3_Automated_Testing
 pip install -r requirements.txt
 pytest tests/ -v                                       # run all tests
 pytest tests/ --cov=inventory --cov-report=term-missing # with coverage
+```
+
+---
+
+## Week 4 — Performance Optimization in Python Applications
+
+**Folder:** [`Week4_Performance_Optimization/`](./Week4_Performance_Optimization/)
+**Files:** `baseline.py`, `optimized.py`, `generate_data.py`, `benchmark.py`,
+`Week4_Report.md`, `README.md`
+
+An inventory analytics tool (duplicate detection, category totals,
+top-10 valuable items, text report) built in two versions: a
+deliberately unoptimized baseline, and an optimized version with every
+profiled bottleneck fixed. Result: **~57x faster on 30,000 rows
+(3.38s → 0.06s)**, with outputs verified identical between both
+versions.
+
+### Baseline profiling (cProfile, 30,000 rows)
+
+```
+$ python3 -m cProfile -s cumulative baseline.py large_inventory.csv baseline_report.txt
+
+         269993 function calls (269987 primitive calls) in 3.376 seconds
+
+   ncalls  tottime  percall  cumtime  percall filename:lineno(function)
+        1    3.187    3.187    3.197    3.197 baseline.py:30(find_duplicates)
+    30001    0.056    0.000    0.085    0.000 csv.py:112(__next__)
+        1    0.058    0.058    0.060    0.060 baseline.py:51(compute_category_totals)
+        1    0.010    0.010    0.025    0.025 {built-in method builtins.sorted}
+```
+
+`find_duplicates` alone is 3.187s of the 3.376s total — **94% of all
+execution time.** That's the primary target, confirmed by profiling
+data rather than assumed.
+
+### Bottlenecks found, with before/after code
+
+**Bottleneck 1 — `find_duplicates`: O(n²) list membership checks**
+```python
+# Before (list `in` is an O(n) scan, done once per item -> O(n²) overall)
+seen = []
+duplicates = []
+for item in items:
+    name = item["name"]
+    if name in seen:
+        if name not in duplicates:
+            duplicates.append(name)
+    else:
+        seen.append(name)
+
+# After (set membership is O(1) average case -> O(n) overall)
+seen = set()
+duplicates = set()
+for item in items:
+    name = item["name"]
+    if name in seen:
+        duplicates.add(name)
+    else:
+        seen.add(name)
+return sorted(duplicates)
+```
+
+**Bottleneck 2 — `compute_category_totals`: O(C × n) redundant re-scans**
+```python
+# Before (re-scans ALL items once per category)
+for category in categories:
+    total = 0.0
+    for item in items:
+        if item["category"] == category:
+            total += int(item["quantity"]) * float(item["price"])
+    totals[category] = total
+
+# After (single pass, dict accumulation)
+totals = defaultdict(float)
+for item in items:
+    value = int(item["quantity"]) * float(item["price"])
+    totals[item["category"]] += value
+```
+
+**Bottleneck 3 — `top_n_by_value`: full sort + value recomputed on every comparison**
+```python
+# Before
+def value_of(item):
+    return int(item["quantity"]) * float(item["price"])  # recomputed every comparison
+sorted_items = sorted(items, key=value_of, reverse=True)   # full O(n log n) sort
+
+# After (value computed once, heapq finds top-n directly)
+valued = [(item["name"], int(item["quantity"]) * float(item["price"])) for item in items]
+return heapq.nlargest(n, valued, key=lambda pair: pair[1])
+```
+
+**Bottleneck 4 — `build_report`: string concatenation in a loop**
+```python
+# Before
+report += f"  - {name}\n"   # repeated += in a loop
+
+# After
+parts.append(f"  - {name}\n")  # ... then "".join(parts) once at the end
+```
+**Honest profiling note:** at 30,000 rows this specific pattern cost
+0.001s in *both* versions — not a measurable bottleneck under CPython,
+which has an internal optimization for `+=` on strings with refcount 1.
+Fixed anyway since `str.join()` is guaranteed O(n) by language
+semantics, not an implementation detail — but reported honestly rather
+than inventing a speedup that profiling didn't show.
+
+### Benchmark: baseline vs. optimized across dataset sizes
+
+Measured with `timeit`, best-of-3 runs, via `benchmark.py`:
+
+| Rows | Baseline (s) | Optimized (s) | Speedup |
+|-----:|-------------:|---------------:|--------:|
+| 5,000 | 0.0974 | 0.0084 | 11.6x |
+| 10,000 | 0.3566 | 0.0172 | 20.7x |
+| 20,000 | 1.4414 | 0.0389 | 37.1x |
+| 30,000 | 3.3185 | 0.0500 | 66.4x |
+
+Rows grew 6x (5,000 → 30,000); baseline time grew ~34x (consistent with
+O(n²): 6²=36) while optimized time grew ~6x (consistent with O(n)). The
+speedup *widening* as data grows is the signature of an algorithmic
+fix, not just a constant-factor tweak — full analysis in
+[`Week4_Performance_Optimization/Week4_Report.md`](./Week4_Performance_Optimization/Week4_Report.md).
+
+### Correctness verification
+
+Baseline and optimized outputs were cross-checked on the same dataset
+before accepting the speedup as valid:
+
+```python
+b_dupes = set(baseline.find_duplicates(items))
+o_dupes = set(optimized.find_duplicates(items))
+assert b_dupes == o_dupes                                            # True, 3,808 names
+
+b_totals, o_totals = baseline.compute_category_totals(items), optimized.compute_category_totals(items)
+assert set(b_totals) == set(o_totals)
+assert all(abs(b_totals[k] - o_totals[k]) < 0.01 for k in b_totals)   # True
+
+b_top = set((n, round(v, 2)) for n, v in baseline.top_n_by_value(items, n=10))
+o_top = set((n, round(v, 2)) for n, v in optimized.top_n_by_value(items, n=10))
+assert b_top == o_top                                                 # True
+```
+
+All three checks passed — duplicate names, category totals, and top-10
+items are identical between versions.
+
+### How to run
+
+```bash
+cd Week4_Performance_Optimization
+python3 generate_data.py 30000 large_inventory.csv
+python3 baseline.py large_inventory.csv baseline_report.txt
+python3 optimized.py large_inventory.csv optimized_report.txt
+python3 -m cProfile -s cumulative baseline.py large_inventory.csv baseline_report.txt
+python3 benchmark.py
 ```
 
 ---
