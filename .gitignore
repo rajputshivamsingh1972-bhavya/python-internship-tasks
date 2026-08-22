@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Generated data/output files from running the projects in this repo
+tasks.json
+*.db
+*.pkl
+*.log
+large_inventory.csv
+inv_*.csv
+baseline_report.txt
+optimized_report.txt
+report.txt
+
+# OS
+.DS_Store

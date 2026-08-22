@@ -826,10 +826,34 @@ folder and choosing the coverage threshold, is in
 ## Technologies
 
 - Python 3.8+
-- Python Standard Library only (`json`, `csv`, `os`, `datetime`, `typing`, `sys`)
+- Python Standard Library only across every week — `json`, `csv`, `os`,
+  `datetime`, `typing`, `sys`, `sqlite3`, `hashlib`, `hmac`, `secrets`,
+  `heapq`, `collections`, `re`, `logging`, `pickle` (Week 5, examined
+  as a vulnerability), `cProfile`, `timeit`
+- `pytest` + `pytest-cov` (Week 3 test suite)
+- `flake8` (Week 6 CI linting)
+- GitHub Actions (Week 6 CI/CD pipeline)
+
+No external runtime dependencies are required for any of the six
+applications themselves — only `pytest`/`pytest-cov`/`flake8` are
+needed to run tests or lint, and those are captured in
+`Week3_Automated_Testing/requirements.txt`.
 
 ## Purpose
 
-These projects demonstrate modular design, object-oriented programming,
-input validation and error handling, systematic debugging with
-reproducible before/after evidence, and refactoring for code quality.
+Across all six weeks, these projects demonstrate: modular design and
+object-oriented programming (Week 1); systematic debugging with
+reproducible before/after evidence (Week 2); automated testing
+methodology, including regression tests that lock in prior fixes
+(Week 3); profiling-driven performance optimization with verified,
+scaling benchmarks rather than assumed speedups (Week 4); a real
+security audit — vulnerabilities actually exploited, then fixed, then
+re-verified as blocked, not just described (Week 5); and a working
+CI/CD pipeline that automatically lints and tests every change across
+multiple Python versions, confirmed via an actual passing run on
+GitHub Actions rather than just a configuration file (Week 6).
+
+Every deliverable in this repository was run and verified locally (and,
+for Week 6, on GitHub's own infrastructure) before being documented —
+the numbers and outputs shown throughout this README are real
+measurements and real results, not illustrative examples.
