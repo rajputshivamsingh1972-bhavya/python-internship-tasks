@@ -1,0 +1,70 @@
+name: CI
+
+# Runs on every push and pull request targeting main. This covers both
+# "did my own change break anything" and "does this incoming PR break
+# anything before it's merged" -- the two situations CI exists for.
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Matrix: the same test suite runs against four Python versions in
+    # parallel. This catches version-specific breakage (e.g. a stdlib
+    # behavior change) that testing against a single version would miss,
+    # and mirrors how a real open-source project would support a range
+    # of versions its users might have installed.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+
+    # The tested project lives in a subfolder (this repo contains
+    # multiple weeks' worth of separate projects), so every step below
+    # runs with that folder as its working directory rather than the
+    # repo root.
+    defaults:
+      run:
+        working-directory: Week3_Automated_Testing
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8
+
+      # Lint runs BEFORE tests: a style/quality problem should be caught
+      # immediately and cheaply, before spending time running the full
+      # test suite. If this step fails, the job stops here.
+      - name: Lint with flake8
+        run: |
+          flake8 inventory tests --max-line-length=100 --extend-ignore=E203
+
+      # --cov-fail-under enforces a minimum coverage bar in CI itself,
+      # not just as a number in a report someone might not check.
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=inventory --cov-report=term-missing \
+            --cov-report=xml --cov-fail-under=95
+
+      # Coverage report is only uploaded once (from the 3.12 job) to
+      # avoid four redundant copies of the same artifact for one commit.
+      - name: Upload coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: Week3_Automated_Testing/coverage.xml

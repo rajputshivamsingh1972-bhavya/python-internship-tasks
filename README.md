@@ -4,7 +4,7 @@ This repository contains my Python internship assignments. Full project
 files for each week live in their own folder (linked below); this README
 also inlines the key required deliverables directly — architecture, flow
 diagram/pseudocode, representative code, and test scenarios — for Weeks
-1 through 5, so everything can be reviewed without opening subfolders.
+1 through 6, so everything can be reviewed without opening subfolders.
 
 ---
 
@@ -704,6 +704,122 @@ python3 vulnerable_app.py   # insecure baseline -- do not deploy
 export APP_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
 python3 secure_app.py       # hardened version
 ```
+
+---
+
+## Week 6 — Integrating Continuous Integration (CI) in Python Projects
+
+**Files:** [`.github/workflows/ci.yml`](./.github/workflows/ci.yml) (the pipeline itself),
+[`Week6_CI_CD_Pipeline/README.md`](./Week6_CI_CD_Pipeline/README.md) (full documentation)
+
+A GitHub Actions pipeline wired to the Week 3 project — the one project
+in this repo with an actual automated test suite, which is what CI
+exists to run automatically. Every push or pull request to `main`
+lints the code, runs all 31 tests across four Python versions in
+parallel, enforces a 95% minimum coverage threshold, and uploads a
+coverage report artifact.
+
+### Pipeline stages
+
+```
+push / PR to main
+  -> checkout
+  -> set up Python (matrix: 3.9, 3.10, 3.11, 3.12, all in parallel)
+  -> install dependencies (requirements.txt + flake8)
+  -> lint with flake8            (fails fast, before running tests)
+  -> pytest + coverage            (fails the job if any test fails,
+                                    or coverage drops below 95%)
+  -> upload coverage.xml artifact  (only from the 3.12 job)
+```
+
+### The workflow file
+
+```yaml
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+    defaults:
+      run:
+        working-directory: Week3_Automated_Testing
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8
+      - name: Lint with flake8
+        run: |
+          flake8 inventory tests --max-line-length=100 --extend-ignore=E203
+      - name: Run tests with coverage
+        run: |
+          pytest tests/ -v --cov=inventory --cov-report=term-missing \
+            --cov-report=xml --cov-fail-under=95
+      - name: Upload coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: Week3_Automated_Testing/coverage.xml
+```
+
+### Design decisions
+
+- **`working-directory: Week3_Automated_Testing`** — this repo holds six
+  separate weekly projects rather than one Python package at the root,
+  so every command runs from inside that specific project folder.
+- **Matrix across 4 Python versions, `fail-fast: false`** — catches
+  version-specific breakage a single-version run would miss, without
+  one version's failure cancelling the others mid-run.
+- **Lint before test** — fails fast and cheaply on style issues before
+  spending time on the full test suite.
+- **`--cov-fail-under=95`** — coverage is enforced, not just reported.
+  A change that drops coverage below 95% fails CI even if every
+  existing test passes.
+- **Artifact upload gated to one Python version** — avoids uploading
+  four redundant copies of the same coverage report per run.
+
+### Local replication (what CI runs, confirmed locally before pushing)
+
+```bash
+cd Week3_Automated_Testing
+pip install -r requirements.txt
+pip install flake8
+
+flake8 inventory tests --max-line-length=100 --extend-ignore=E203
+# exit code 0 -- clean
+
+pytest tests/ -v --cov=inventory --cov-report=term-missing --cov-report=xml --cov-fail-under=95
+# 31 passed, 98.55% coverage, "Required test coverage of 95% reached"
+```
+
+### Viewing pipeline runs
+
+Once pushed, any commit or PR against `main` triggers this
+automatically — visible under the repo's **Actions** tab on GitHub,
+with per-matrix-version logs and, on the 3.12 job, a downloadable
+coverage report artifact.
+
+Full write-up, including the challenges around the nested project
+folder and choosing the coverage threshold, is in
+[`Week6_CI_CD_Pipeline/README.md`](./Week6_CI_CD_Pipeline/README.md).
 
 ---
 
