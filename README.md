@@ -4,7 +4,7 @@ This repository contains my Python internship assignments. Full project
 files for each week live in their own folder (linked below); this README
 also inlines the key required deliverables directly — architecture, flow
 diagram/pseudocode, representative code, and test scenarios — for Weeks
-1 through 4, so everything can be reviewed without opening subfolders.
+1 through 5, so everything can be reviewed without opening subfolders.
 
 ---
 
@@ -539,6 +539,170 @@ python3 baseline.py large_inventory.csv baseline_report.txt
 python3 optimized.py large_inventory.csv optimized_report.txt
 python3 -m cProfile -s cumulative baseline.py large_inventory.csv baseline_report.txt
 python3 benchmark.py
+```
+
+---
+
+## Week 5 — Security Enhancements in Python Applications
+
+**Folder:** [`Week5_Security_Enhancements/`](./Week5_Security_Enhancements/)
+**Files:** `vulnerable_app.py`, `secure_app.py`, `security_audit.md`, `README.md`
+
+A small SQLite-backed user-directory CLI app (register, login, search,
+save/restore session) built in two versions. Every vulnerability below
+was **actually exploited** against the vulnerable version — not just
+described — then fixed, then the same exploit was re-run against the
+secure version to confirm it's blocked. Full transcripts in
+[`Week5_Security_Enhancements/security_audit.md`](./Week5_Security_Enhancements/security_audit.md).
+
+### Vulnerability 1 — Plain-text password storage
+
+```python
+# Before: password stored exactly as typed
+conn.execute("INSERT INTO users (username, password, email) VALUES (?, ?, ?)",
+             (username, password, email))
+```
+**Exploit:** reading `users.db` directly returns every password in the clear:
+```
+('alice', 'correcthorsebattery')
+('bob', 'hunter2')
+('admin', 'ExtremelySecretAdminPass!')
+```
+**Fix:** PBKDF2-HMAC-SHA256 with a random per-user salt, 200,000 iterations,
+constant-time comparison:
+```python
+def _hash_password(password, salt):
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt, 200_000).hex()
+...
+if hmac.compare_digest(candidate_hash, stored_hash):
+```
+**Re-verified:** DB now only contains salted hashes — no password recoverable.
+
+*(PBKDF2 was chosen to stay standard-library-only; a production system
+would likely prefer argon2id/bcrypt for stronger GPU-crack resistance —
+noted explicitly in the audit rather than overstating this fix.)*
+
+### Vulnerability 2 — SQL injection (auth bypass + mass data exfiltration)
+
+```python
+# Before
+query = f"SELECT * FROM users WHERE username='{username}' AND password='{password}'"
+```
+**Exploit A (auth bypass, zero password knowledge):**
+```python
+app.login(conn, "admin' -- ", "anything_at_all")
+# -> (3, 'admin', 'ExtremelySecretAdminPass!', 'admin@example.com')
+# BYPASSED AUTH: True
+```
+**Exploit B (search feature dumps every password in the DB):**
+```python
+app.search_users(conn, "' UNION SELECT username, password FROM users --")
+# -> ('admin', 'ExtremelySecretAdminPass!'), ('alice', 'correcthorsebattery'), ...
+```
+**Fix:** parameterized queries everywhere — user input is bound as data,
+never spliced into SQL text:
+```python
+cursor = conn.execute(
+    "SELECT username, password_hash, salt, email FROM users WHERE username = ?",
+    (username,),
+)
+```
+**Re-verified:** both exploits now return `None` / `[]` — no bypass, no leak.
+
+### Vulnerability 3 — Insecure `pickle` deserialization (remote code execution)
+
+```python
+# Before
+pickle.dump(user_data, f)   # and pickle.load(f) to restore
+```
+**Exploit (harmless proof-of-concept — real attacks could run anything):**
+```python
+class MaliciousPayload:
+    def __reduce__(self):
+        return (os.system, ("touch /tmp/PWNED_via_pickle.marker",))
+pickle.dump(MaliciousPayload(), open("session.pkl", "wb"))
+# Calling the app's ordinary load_session() then executes it:
+# ARBITRARY CODE EXECUTED DURING DESERIALIZATION: True
+```
+**Fix:** signed JSON instead of pickle — JSON has no mechanism to execute
+code on load, and an HMAC signature catches tampering:
+```python
+payload = json.dumps(user_data, sort_keys=True).encode()
+signature = hmac.new(SECRET_KEY.encode(), payload, hashlib.sha256).hexdigest()
+```
+**Re-verified:** legitimate sessions still load correctly; a tampered
+session file is rejected outright (`"Session data failed integrity check"`)
+rather than silently trusted.
+
+### Vulnerability 4 — Verbose errors leak internals
+
+```python
+# Before
+except Exception as exc:
+    traceback.print_exc()   # shown directly to the user
+```
+**Exploit:** a malformed injection attempt crashes with the raw query visible:
+```
+sqlite3.OperationalError: near "' AND password='": syntax error
+```
+This confirms to an attacker the app builds raw SQL — valuable
+reconnaissance for refining an injection payload.
+
+**Fix:** only two known-safe exception types are ever shown to the user;
+everything else is logged in full detail server-side, without passwords:
+```python
+except (ValidationError, AppError) as exc:
+    print(f"Error: {exc}")
+except Exception:
+    logging.exception("Unhandled error")
+    print("Error: something went wrong. Please try again.")
+```
+**Re-verified:** user now sees only `"Username must be 3-20 characters..."` —
+no file paths, no query text, no traceback.
+
+### Vulnerability 5 — Hardcoded secret key
+
+```python
+# Before
+SECRET_KEY = "supersecretkey123"   # committed in source, permanent, unrotatable
+```
+**Fix:** read from environment; hard-fail (not silent fallback) if missing:
+```python
+SECRET_KEY = os.environ.get("APP_SECRET_KEY")
+if not SECRET_KEY:
+    print("ERROR: APP_SECRET_KEY environment variable is not set...")
+    return
+```
+
+### Vulnerability 6 — No input validation
+
+**Fix:** username/email/password validated before any database write:
+```python
+USERNAME_RE = re.compile(r"^[A-Za-z0-9_]{3,20}$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+MIN_PASSWORD_LENGTH = 8
+```
+
+### Summary
+
+| Vulnerability | Exploit demonstrated | Status after fix |
+|---|---|---|
+| Plain-text passwords | Read directly from DB | Fixed — salted PBKDF2 hash |
+| SQL injection (login) | Full auth bypass as admin | Blocked — parameterized queries |
+| SQL injection (search) | Dumped every password via search | Blocked — parameterized queries |
+| Insecure `pickle` | Arbitrary code execution on session load | Fixed — signed JSON, no code path |
+| Verbose errors | Leaked raw SQL + file paths | Fixed — generic user message, server-side logging |
+| Hardcoded secret | Permanent exposure in source/history | Fixed — env var, hard-fails if unset |
+| No input validation | Enabled the above | Fixed — regex/length checks pre-DB-write |
+
+### How to run
+
+```bash
+cd Week5_Security_Enhancements
+python3 vulnerable_app.py   # insecure baseline -- do not deploy
+
+export APP_SECRET_KEY=$(python3 -c "import secrets; print(secrets.token_hex(32))")
+python3 secure_app.py       # hardened version
 ```
 
 ---
