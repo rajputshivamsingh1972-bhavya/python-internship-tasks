@@ -4,7 +4,7 @@ This repository contains my Python internship assignments. Full project
 files for each week live in their own folder (linked below); this README
 also inlines the key required deliverables directly — architecture, flow
 diagram/pseudocode, representative code, and test scenarios — for Weeks
-1 and 2, so everything can be reviewed without opening subfolders.
+1, 2, and 3, so everything can be reviewed without opening subfolders.
 
 ---
 
@@ -272,6 +272,120 @@ fixed, and re-tested afterward to confirm the fix (full transcripts of
 both in `debug_log.md`). For example, Bug 4's fix was confirmed by
 checking that "Widget E" now appears in the generated `report.txt`
 under "Low stock items," where it was previously missing.
+
+---
+
+## Week 3 — Writing Automated Tests for Python Applications
+
+**Folder:** [`Week3_Automated_Testing/`](./Week3_Automated_Testing/)
+**Files:** `inventory/__init__.py`, `inventory/core.py`, `tests/test_core.py`,
+`README.md`, `TESTING.md`, `requirements.txt`
+
+The Week 2 inventory module was refactored to be independently
+unit-testable, then covered with a 31-test `pytest` suite spanning unit,
+I/O, and integration tests — **31/31 passing, 99% line coverage**.
+
+### Module structure
+
+```
+inventory/
+  __init__.py       - package exports
+  core.py           - read_inventory, compute_item_value, apply_bulk_discount,
+                       find_low_stock, average_price, write_report, run_report, main
+tests/
+  test_core.py       - 31 tests across 8 test classes
+```
+
+`main()` was split into a parameterized `run_report(input_path, output_path)`
+so the full pipeline could be integration-tested against temporary files
+instead of hardcoded filenames — the single change that made end-to-end
+testing possible without touching real files:
+
+```python
+# Before (Week 2): hardcoded paths, not directly testable
+def main():
+    items = read_inventory("inventory.csv")
+    ...
+    write_report("report.txt", discounted, low_stock, avg)
+
+# After (Week 3): explicit parameters, fully testable
+def run_report(input_path="inventory.csv", output_path="report.txt"):
+    items = read_inventory(input_path)
+    discounted = apply_bulk_discount(items)
+    low_stock = find_low_stock(items)
+    avg = average_price(items)
+    write_report(output_path, discounted, low_stock, avg)
+    return {"discounted": discounted, "low_stock": low_stock, "average_price": avg}
+```
+
+### Test methodology
+
+Every pure computation function (`compute_item_value`, `apply_bulk_discount`,
+`find_low_stock`, `average_price`) is tested with direct input/output
+assertions — no file I/O involved. The two I/O functions
+(`read_inventory`, `write_report`) are tested against pytest's `tmp_path`
+fixture, so tests never touch real files outside a temp directory pytest
+cleans up automatically. `run_report()` gets a full integration test
+exercising the whole pipeline end to end.
+
+Boundary conditions get dedicated tests wherever the code has a
+comparison operator that could be off by one — for example:
+
+```python
+def test_boundary_quantity_exactly_at_threshold_gets_no_discount(self):
+    # threshold uses a strict ">" comparison, so qty == threshold
+    # should NOT receive a discount.
+    items = [{"name": "A", "quantity": "50", "price": "2.00"}]
+    result = apply_bulk_discount(items, threshold=50, discount=0.10)
+    assert result == [("A", 100.0)]
+```
+
+Every bug fixed during the Week 2 debugging exercise also has a
+dedicated **regression test**, so it can never silently reappear:
+
+```python
+def test_repeated_calls_do_not_accumulate_stale_results(self):
+    # Regression test for the Week 2 mutable-default-argument bug.
+    items = [{"name": "A", "quantity": "10", "price": "1.00"}]
+    first_call = apply_bulk_discount(items)
+    second_call = apply_bulk_discount(items)
+    assert len(first_call) == 1
+    assert len(second_call) == 1
+
+def test_last_item_in_list_is_included(self):
+    # Regression test for the Week 2 off-by-one bug that silently
+    # skipped the last item in the inventory.
+    items = [
+        {"name": "First", "quantity": "1", "price": "1.00"},
+        {"name": "Last", "quantity": "1", "price": "1.00"},
+    ]
+    assert "Last" in find_low_stock(items, min_qty=5)
+```
+
+### Test case summary
+
+| Test class | Tests | Covers |
+|---|---|---|
+| `TestComputeItemValue` | 4 | Basic multiplication, zero qty, decimal precision, string-to-number conversion regression |
+| `TestApplyBulkDiscount` | 7 | No/with discount, exact threshold boundary, custom params, mutable-default regression |
+| `TestFindLowStock` | 5 | Flagging, exact boundary, no matches, empty list, off-by-one regression |
+| `TestAveragePrice` | 3 | Multiple items, single item, empty-list regression (ZeroDivisionError) |
+| `TestReadInventory` | 4 | Valid parse, missing file, generic OSError, empty file, malformed row |
+| `TestWriteReport` | 3 | Content correctness, empty-list placeholder, invalid-path regression |
+| `TestRunReportIntegration` | 2 | Full pipeline end-to-end, missing-input propagation |
+| `TestMainEntryPoint` | 2 | CLI success path (exit 0), CLI failure path (exit 1, stderr message) |
+
+Full case-by-case rationale for every test is in
+[`Week3_Automated_Testing/TESTING.md`](./Week3_Automated_Testing/TESTING.md).
+
+### How to run
+
+```bash
+cd Week3_Automated_Testing
+pip install -r requirements.txt
+pytest tests/ -v                                       # run all tests
+pytest tests/ --cov=inventory --cov-report=term-missing # with coverage
+```
 
 ---
 
